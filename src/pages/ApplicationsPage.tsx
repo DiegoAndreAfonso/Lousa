@@ -367,18 +367,21 @@ export default function ApplicationsPage() {
 
           <div className="card mg-list-panel">
             <div className="mg-toolbar">
-              <label className="mg-search">
-                <Search size={18} />
-                <input
-                  aria-label="Pesquisar aplicações"
-                  className="search-input"
-                  value={search}
-                  onChange={(event) => setSearch(event.target.value)}
-                  placeholder="Buscar por título, disciplina ou código"
-                />
+              <label className="mg-search mg-labelled-search">
+                <span className="mg-filter-label">Pesquisar aplicações</span>
+                <span className="mg-search-control">
+                  <Search size={18} aria-hidden="true" />
+                  <input
+                    aria-label="Pesquisar aplicações"
+                    className="search-input"
+                    value={search}
+                    onChange={(event) => setSearch(event.target.value)}
+                    placeholder="Buscar por título, disciplina ou código"
+                  />
+                </span>
               </label>
-              <label className="mg-filter">
-                <span className="mg-sr-only">Filtrar por situação</span>
+              <label className="mg-filter mg-labelled-filter">
+                <span className="mg-filter-label">Filtrar por situação</span>
                 <select
                   value={statusFilter}
                   onChange={(event) => setStatusFilter(event.target.value)}

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   ArrowLeft,
@@ -14,6 +14,17 @@ import {
 import { demoApi, newId } from "../services/demoApi";
 import ContentDialog from "../components/ContentDialog";
 import QuestionEditor from "../components/QuestionEditor";
+import UnsavedChangesDialog from "../components/UnsavedChangesDialog";
+import { useUnsavedChanges } from "../services/useUnsavedChanges";
+import {
+  assessmentContent,
+  assessmentDraftKey,
+  readAssessmentDraft,
+  removeAssessmentDraft,
+  restoreAssessmentDraft,
+  saveAssessmentDraft,
+  type AssessmentDraft,
+} from "../services/assessmentDrafts";
 import type {
   Assessment,
   Material,
@@ -47,48 +58,58 @@ function blankAssessment(): Assessment {
     updatedAt: now,
   };
 }
-function validate(draft: Assessment): Record<string, string> {
+type QuestionErrorField = "prompt" | "points" | "options" | "correctAnswer";
+function validate(draft: Assessment) {
   const errors: Record<string, string> = {};
+  const questionFields: Record<string, QuestionErrorField> = {};
   if (!draft.title.trim()) errors.title = "Informe um título para a avaliação.";
   if (!draft.subject.trim()) errors.subject = "Informe a disciplina.";
   if (draft.questions.length === 0)
     errors.questions = "Adicione pelo menos uma questão.";
   draft.questions.forEach((question) => {
-    if (!question.prompt.trim())
+    if (!question.prompt.trim()) {
       errors[question.id] = "Escreva o enunciado desta questão.";
-    else if (
+      questionFields[question.id] = "prompt";
+    } else if (
       !Number.isFinite(question.points) ||
       question.points <= 0 ||
       question.points > 10000
-    )
+    ) {
       errors[question.id] = "A pontuação deve ser maior que zero e até 10.000.";
-    else if (question.type === "single") {
+      questionFields[question.id] = "points";
+    } else if (question.type === "single") {
       if (
         question.options.length < 2 ||
         question.options.some((option) => !option.trim())
-      )
+      ) {
         errors[question.id] =
           "Preencha todas as alternativas. São necessárias pelo menos duas.";
-      else if (
+        questionFields[question.id] = "options";
+      } else if (
         new Set(
           question.options.map((option) =>
             option.trim().toLocaleLowerCase("pt-BR"),
           ),
         ).size !== question.options.length
-      )
+      ) {
         errors[question.id] = "As alternativas devem ter textos diferentes.";
-      else if (
+        questionFields[question.id] = "options";
+      } else if (
         !question.correctAnswer ||
         !question.options.includes(question.correctAnswer)
-      )
+      ) {
         errors[question.id] = "Marque a alternativa correta.";
+        questionFields[question.id] = "correctAnswer";
+      }
     } else if (
       question.type === "boolean" &&
       !["Verdadeiro", "Falso"].includes(question.correctAnswer || "")
-    )
+    ) {
       errors[question.id] = "Selecione Verdadeiro ou Falso para o gabarito.";
+      questionFields[question.id] = "correctAnswer";
+    }
   });
-  return errors;
+  return { errors, questionFields };
 }
 
 function StudentPreview({
@@ -219,7 +240,22 @@ export default function AssessmentEditorPage() {
     (location.state as { saved?: boolean } | null)?.saved,
   );
   const editing = Boolean(id && id !== "nova");
+  const draftId = editing ? id : undefined;
+  const routeKey = assessmentDraftKey(draftId);
   const [draft, setDraft] = useState<Assessment>(blankAssessment);
+  const [baseline, setBaseline] = useState<Assessment | null>(null);
+  const [loadedKey, setLoadedKey] = useState<string | null>(null);
+  const [draftState, setDraftState] = useState<"idle" | "saved" | "error">(
+    "idle",
+  );
+  const [draftError, setDraftError] = useState("");
+  const [restored, setRestored] = useState(false);
+  const [conflictingDraft, setConflictingDraft] =
+    useState<AssessmentDraft | null>(null);
+  const [discardOpen, setDiscardOpen] = useState(false);
+  const [createdId, setCreatedId] = useState<string | null>(null);
+  const draftPresent = useRef(false);
+  const focusInvalid = useRef(false);
   const [materials, setMaterials] = useState<Material[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -229,30 +265,72 @@ export default function AssessmentEditorPage() {
     text: string;
   } | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [questionFields, setQuestionFields] = useState<
+    Record<string, QuestionErrorField>
+  >({});
   const [preview, setPreview] = useState(false);
   const [removeTarget, setRemoveTarget] = useState<string | null>(null);
+  const ready = !loading && loadedKey === routeKey && !!baseline;
+  const dirty =
+    ready && assessmentContent(draft) !== assessmentContent(baseline!);
+  const blocker = useUnsavedChanges(dirty);
   useEffect(() => {
     let alive = true;
     setLoading(true);
+    setLoadedKey(null);
+    setBaseline(null);
+    setDraftState("idle");
+    setDraftError("");
+    setRestored(false);
+    setConflictingDraft(null);
+    setDiscardOpen(false);
+    draftPresent.current = false;
     setLoadError("");
     setNotice(null);
     setErrors({});
+    setQuestionFields({});
     Promise.all([demoApi.listAssessments(), demoApi.listMaterials()])
       .then(([all, available]) => {
         if (!alive) return;
         setMaterials(available);
-        if (editing) {
-          const assessment = all.find((item) => item.id === id);
-          if (!assessment) setLoadError("Esta avaliação não foi encontrada.");
-          else {
-            setDraft(structuredClone(assessment));
-            if (justCreated)
-              setNotice({
-                type: "success",
-                text: "Avaliação criada e salva neste navegador. Ela já pode ser usada em uma aplicação.",
-              });
+        const assessment = editing
+          ? all.find((item) => item.id === id)
+          : blankAssessment();
+        if (!assessment) {
+          setLoadError("Esta avaliação não foi encontrada.");
+          return;
+        }
+        const base = structuredClone(assessment);
+        setBaseline(base);
+        setDraft(base);
+        setLoadedKey(routeKey);
+        let draftRecovered = false;
+        try {
+          const record = readAssessmentDraft(draftId);
+          if (record) {
+            draftPresent.current = true;
+            const recovered = restoreAssessmentDraft(base, record, editing);
+            if (assessmentContent(recovered) !== assessmentContent(base)) {
+              draftRecovered = true;
+              if (editing && record.baseUpdatedAt !== base.updatedAt)
+                setConflictingDraft(record);
+              else {
+                setDraft(recovered);
+                setRestored(true);
+              }
+            }
           }
-        } else setDraft(blankAssessment());
+        } catch {
+          setDraftState("error");
+          setDraftError(
+            "Não foi possível consultar o rascunho local. Mantenha esta página aberta até salvar a avaliação.",
+          );
+        }
+        if (justCreated && !draftRecovered)
+          setNotice({
+            type: "success",
+            text: "Avaliação criada e salva neste navegador. Ela já pode ser usada em uma aplicação.",
+          });
       })
       .catch(() => {
         if (alive)
@@ -266,10 +344,78 @@ export default function AssessmentEditorPage() {
     return () => {
       alive = false;
     };
-  }, [id, editing, justCreated]);
+  }, [id, editing, justCreated, draftId, routeKey]);
+
+  useEffect(() => {
+    if (!ready || conflictingDraft) return;
+    try {
+      if (dirty) {
+        saveAssessmentDraft(draft, baseline, draftId);
+        draftPresent.current = true;
+        setDraftState("saved");
+        setDraftError("");
+      } else if (draftPresent.current) {
+        removeAssessmentDraft(draftId);
+        draftPresent.current = false;
+        setDraftState("idle");
+        setRestored(false);
+      }
+    } catch {
+      setDraftState("error");
+      setDraftError(
+        "Não foi possível salvar o rascunho neste navegador. Suas alterações continuam nesta página; salve a avaliação antes de sair.",
+      );
+    }
+  }, [ready, dirty, draft, baseline, draftId, conflictingDraft]);
+
+  useEffect(() => {
+    if (!focusInvalid.current) return;
+    focusInvalid.current = false;
+    const invalid = document.querySelector<HTMLElement>(
+      '.assessment-editor-layout [aria-invalid="true"]',
+    );
+    (invalid ?? document.getElementById("add-first-question"))?.focus();
+  }, [errors]);
+
+  useEffect(() => {
+    if (!createdId) return;
+    navigate(`/avaliacoes/${createdId}`, {
+      replace: true,
+      state: { saved: true },
+    });
+    setCreatedId(null);
+  }, [createdId, navigate]);
+
+  function discardDraft() {
+    if (!baseline) return;
+    try {
+      removeAssessmentDraft(draftId);
+      draftPresent.current = false;
+      setDraft(structuredClone(baseline));
+      setRestored(false);
+      setConflictingDraft(null);
+      setDraftError("");
+      setDraftState("idle");
+      setErrors({});
+      setQuestionFields({});
+      setNotice(null);
+      setDiscardOpen(false);
+    } catch {
+      setDraftError(
+        "Não foi possível descartar o rascunho local. Suas alterações foram mantidas; tente novamente.",
+      );
+      setDraftState("error");
+      setDiscardOpen(false);
+    }
+  }
   function patch(value: Partial<Assessment>) {
     setDraft((current) => ({ ...current, ...value }));
     setNotice(null);
+    setErrors((current) => {
+      const next = { ...current };
+      for (const field of Object.keys(value)) delete next[field];
+      return next;
+    });
   }
   function updateQuestion(question: Question) {
     setDraft((current) => ({
@@ -290,10 +436,13 @@ export default function AssessmentEditorPage() {
     patch({ questions });
   }
   async function save() {
-    const nextErrors = validate(draft);
-    setErrors(nextErrors);
+    if (saving || conflictingDraft) return;
+    const validation = validate(draft);
+    setErrors(validation.errors);
+    setQuestionFields(validation.questionFields);
     setNotice(null);
-    if (Object.keys(nextErrors).length) {
+    if (Object.keys(validation.errors).length) {
+      focusInvalid.current = true;
       setNotice({
         type: "error",
         text: "Confira os campos destacados antes de salvar a avaliação.",
@@ -320,12 +469,21 @@ export default function AssessmentEditorPage() {
     };
     try {
       const saved = await demoApi.saveAssessment(next);
+      setBaseline(saved);
       setDraft(saved);
-      if (!editing)
-        navigate(`/avaliacoes/${saved.id}`, {
-          replace: true,
-          state: { saved: true },
-        });
+      setRestored(false);
+      try {
+        removeAssessmentDraft(draftId);
+        draftPresent.current = false;
+        setDraftState("idle");
+        setDraftError("");
+      } catch {
+        setDraftError(
+          "A avaliação foi salva, mas não foi possível limpar o rascunho local. A versão confirmada permanece disponível.",
+        );
+        setDraftState("error");
+      }
+      if (!editing) setCreatedId(saved.id);
       else
         setNotice({
           type: "success",
@@ -396,12 +554,16 @@ export default function AssessmentEditorPage() {
           </p>
         </div>
         <div className="content-heading-actions">
-          <button className="button secondary" onClick={() => setPreview(true)}>
+          <button
+            className="button secondary"
+            disabled={saving || !!conflictingDraft}
+            onClick={() => setPreview(true)}
+          >
             <Eye size={17} /> Visualizar como aluno
           </button>
           <button
             className="button primary"
-            disabled={saving}
+            disabled={saving || !!conflictingDraft}
             onClick={() => void save()}
           >
             <Save size={17} />
@@ -423,216 +585,321 @@ export default function AssessmentEditorPage() {
           {notice.text}
         </div>
       )}
-      <div className="assessment-editor-layout">
-        <div className="assessment-editor-main">
-          <section className="card editor-details">
-            <div className="content-section-title">
-              <span className="section-icon">
-                <BookOpen size={20} />
-              </span>
-              <div>
-                <h2>Informações da avaliação</h2>
-                <p className="muted">Uma boa organização começa por aqui.</p>
-              </div>
-            </div>
-            <div className="form-grid">
-              <label className="field">
-                <span>
-                  Título <span className="required">*</span>
-                </span>
-                <input
-                  maxLength={160}
-                  placeholder="Ex.: Ecossistemas e biodiversidade"
-                  value={draft.title}
-                  aria-invalid={Boolean(errors.title)}
-                  aria-describedby={errors.title ? "title-error" : undefined}
-                  onChange={(event) => patch({ title: event.target.value })}
-                />
-                {errors.title && (
-                  <small className="field-error" id="title-error">
-                    {errors.title}
-                  </small>
-                )}
-              </label>
-              <label className="field">
-                <span>
-                  Disciplina <span className="required">*</span>
-                </span>
-                <input
-                  maxLength={80}
-                  placeholder="Ex.: Ciências"
-                  value={draft.subject}
-                  aria-invalid={Boolean(errors.subject)}
-                  aria-describedby={
-                    errors.subject ? "subject-error" : undefined
-                  }
-                  onChange={(event) => patch({ subject: event.target.value })}
-                />
-                {errors.subject && (
-                  <small className="field-error" id="subject-error">
-                    {errors.subject}
-                  </small>
-                )}
-              </label>
-            </div>
-            <label className="field">
-              <span>Descrição</span>
-              <textarea
-                maxLength={2000}
-                rows={2}
-                placeholder="Conte brevemente o que será trabalhado."
-                value={draft.description}
-                onChange={(event) => patch({ description: event.target.value })}
-              />
-            </label>
-            <label className="field">
-              <span>Instruções para o aluno</span>
-              <textarea
-                maxLength={6000}
-                rows={3}
-                placeholder="Oriente o aluno sobre como responder à avaliação."
-                value={draft.instructions}
-                onChange={(event) =>
-                  patch({ instructions: event.target.value })
-                }
-              />
-            </label>
-          </section>
-          <div className="questions-heading">
-            <div>
-              <h2>
-                Questões{" "}
-                <span className="badge gray">{draft.questions.length}</span>
-              </h2>
-              <p className="muted">
-                Defina o enunciado, a pontuação e o gabarito.
-              </p>
-            </div>
+      {conflictingDraft && baseline && (
+        <div className="notice info editor-draft-notice">
+          <div>
+            <strong>Existe um rascunho de uma versão anterior.</strong>
+            <p>
+              A avaliação foi atualizada depois desse rascunho. Escolha qual
+              conteúdo deseja continuar editando.
+            </p>
+          </div>
+          <div className="content-heading-actions">
             <button
               className="button secondary small"
+              onClick={() => {
+                setDraft(
+                  restoreAssessmentDraft(baseline, conflictingDraft, editing),
+                );
+                setConflictingDraft(null);
+                setRestored(true);
+              }}
+            >
+              Recuperar rascunho
+            </button>
+            <button
+              className="button ghost small"
+              onClick={() => setDiscardOpen(true)}
+            >
+              Usar versão salva
+            </button>
+          </div>
+        </div>
+      )}
+      {dirty && (
+        <div className="notice info editor-draft-notice">
+          <div role="status">
+            <strong>
+              {restored
+                ? "Seu rascunho foi recuperado."
+                : "Alterações ainda não confirmadas."}
+            </strong>
+            <p>
+              {draftState === "saved"
+                ? "Rascunho salvo automaticamente neste navegador. Clique em Salvar avaliação para confirmar as alterações."
+                : "Mantenha esta página aberta até confirmar as alterações."}
+            </p>
+          </div>
+          <button
+            className="button ghost small"
+            disabled={saving}
+            onClick={() => setDiscardOpen(true)}
+          >
+            Descartar rascunho
+          </button>
+        </div>
+      )}
+      {draftError && (
+        <div className="notice error" role="alert">
+          {draftError}
+        </div>
+      )}
+      <fieldset
+        className="editor-fields"
+        disabled={saving || !!conflictingDraft}
+        aria-label="Conteúdo da avaliação"
+      >
+        <div className="assessment-editor-layout">
+          <div className="assessment-editor-main">
+            <section className="card editor-details">
+              <div className="content-section-title">
+                <span className="section-icon">
+                  <BookOpen size={20} />
+                </span>
+                <div>
+                  <h2>Informações da avaliação</h2>
+                  <p className="muted">Uma boa organização começa por aqui.</p>
+                </div>
+              </div>
+              <div className="form-grid">
+                <label className="field">
+                  <span id="assessment-title-label">
+                    Título <span className="required">*</span>
+                  </span>
+                  <input
+                    maxLength={160}
+                    placeholder="Ex.: Ecossistemas e biodiversidade"
+                    value={draft.title}
+                    aria-labelledby="assessment-title-label"
+                    aria-invalid={Boolean(errors.title)}
+                    aria-describedby={errors.title ? "title-error" : undefined}
+                    onChange={(event) => patch({ title: event.target.value })}
+                  />
+                  {errors.title && (
+                    <small className="field-error" id="title-error">
+                      {errors.title}
+                    </small>
+                  )}
+                </label>
+                <label className="field">
+                  <span id="assessment-subject-label">
+                    Disciplina <span className="required">*</span>
+                  </span>
+                  <input
+                    maxLength={80}
+                    placeholder="Ex.: Ciências"
+                    value={draft.subject}
+                    aria-labelledby="assessment-subject-label"
+                    aria-invalid={Boolean(errors.subject)}
+                    aria-describedby={
+                      errors.subject ? "subject-error" : undefined
+                    }
+                    onChange={(event) => patch({ subject: event.target.value })}
+                  />
+                  {errors.subject && (
+                    <small className="field-error" id="subject-error">
+                      {errors.subject}
+                    </small>
+                  )}
+                </label>
+              </div>
+              <label className="field">
+                <span>Descrição</span>
+                <textarea
+                  maxLength={2000}
+                  rows={2}
+                  placeholder="Conte brevemente o que será trabalhado."
+                  value={draft.description}
+                  onChange={(event) =>
+                    patch({ description: event.target.value })
+                  }
+                />
+              </label>
+              <label className="field">
+                <span>Instruções para o aluno</span>
+                <textarea
+                  maxLength={6000}
+                  rows={3}
+                  placeholder="Oriente o aluno sobre como responder à avaliação."
+                  value={draft.instructions}
+                  onChange={(event) =>
+                    patch({ instructions: event.target.value })
+                  }
+                />
+              </label>
+            </section>
+            <div className="questions-heading">
+              <div>
+                <h2>
+                  Questões{" "}
+                  <span className="badge gray">{draft.questions.length}</span>
+                </h2>
+                <p className="muted">
+                  Defina o enunciado, a pontuação e o gabarito.
+                </p>
+              </div>
+              <button
+                id="add-first-question"
+                className="button secondary small"
+                disabled={draft.questions.length >= 100}
+                onClick={() =>
+                  patch({ questions: [...draft.questions, blankQuestion()] })
+                }
+              >
+                <Plus size={16} /> Adicionar questão
+              </button>
+            </div>
+            {errors.questions && (
+              <p className="field-error" role="alert">
+                {errors.questions}
+              </p>
+            )}
+            {draft.questions.length === 0 && (
+              <div className="card empty-state">
+                <h3>Adicione sua primeira questão</h3>
+                <p className="muted">
+                  Escolha entre alternativa única, verdadeiro ou falso e
+                  resposta aberta.
+                </p>
+              </div>
+            )}
+            {draft.questions.map((question, index) => (
+              <QuestionEditor
+                key={question.id}
+                question={question}
+                index={index}
+                total={draft.questions.length}
+                error={errors[question.id]}
+                errorField={questionFields[question.id]}
+                onChange={updateQuestion}
+                onMove={(direction) => moveQuestion(index, direction)}
+                onRemove={() => setRemoveTarget(question.id)}
+              />
+            ))}
+            <button
+              className="add-question-area"
               disabled={draft.questions.length >= 100}
               onClick={() =>
                 patch({ questions: [...draft.questions, blankQuestion()] })
               }
             >
-              <Plus size={16} /> Adicionar questão
+              <Plus size={20} /> Adicionar uma questão
             </button>
           </div>
-          {errors.questions && (
-            <p className="field-error" role="alert">
-              {errors.questions}
-            </p>
-          )}
-          {draft.questions.length === 0 && (
-            <div className="card empty-state">
-              <h3>Adicione sua primeira questão</h3>
-              <p className="muted">
-                Escolha entre alternativa única, verdadeiro ou falso e resposta
-                aberta.
-              </p>
-            </div>
-          )}
-          {draft.questions.map((question, index) => (
-            <QuestionEditor
-              key={question.id}
-              question={question}
-              index={index}
-              total={draft.questions.length}
-              error={errors[question.id]}
-              onChange={updateQuestion}
-              onMove={(direction) => moveQuestion(index, direction)}
-              onRemove={() => setRemoveTarget(question.id)}
-            />
-          ))}
-          <button
-            className="add-question-area"
-            disabled={draft.questions.length >= 100}
-            onClick={() =>
-              patch({ questions: [...draft.questions, blankQuestion()] })
-            }
-          >
-            <Plus size={20} /> Adicionar uma questão
-          </button>
-        </div>
-        <aside className="editor-sidebar">
-          <section className="card editor-summary">
-            <h2>Resumo da avaliação</h2>
-            <dl>
-              <div>
-                <dt>Questões</dt>
-                <dd>{draft.questions.length}</dd>
-              </div>
-              <div>
-                <dt>Pontuação total</dt>
-                <dd>{totalPoints.toLocaleString("pt-BR")}</dd>
-              </div>
-              <div>
-                <dt>Correção manual</dt>
-                <dd>
-                  {
-                    draft.questions.filter(
-                      (question) => question.type === "open",
-                    ).length
-                  }
-                </dd>
-              </div>
-            </dl>
-            <div className="editor-tip">
-              <Check size={18} />
-              <p>
-                Ao publicar uma aplicação, uma cópia desta avaliação será
-                preservada.
-              </p>
-            </div>
-            <Link className="button secondary" to="/aplicacoes">
-              Ir para aplicações
-            </Link>
-          </section>
-          <section className="card editor-materials">
-            <div className="content-section-title">
-              <FileText size={19} />
-              <h2>Materiais de apoio</h2>
-            </div>
-            <p className="muted">Selecione o que o aluno poderá consultar.</p>
-            {materials.length === 0 ? (
-              <p className="muted">Você ainda não cadastrou materiais.</p>
-            ) : (
-              materials.map((material) => (
-                <label className="material-checkbox" key={material.id}>
-                  <input
-                    type="checkbox"
-                    checked={draft.materialIds.includes(material.id)}
-                    onChange={(event) =>
-                      patch({
-                        materialIds: event.target.checked
-                          ? [...draft.materialIds, material.id]
-                          : draft.materialIds.filter(
-                              (value) => value !== material.id,
-                            ),
-                      })
+          <aside className="editor-sidebar">
+            <section className="card editor-summary">
+              <h2>Resumo da avaliação</h2>
+              <dl>
+                <div>
+                  <dt>Questões</dt>
+                  <dd>{draft.questions.length}</dd>
+                </div>
+                <div>
+                  <dt>Pontuação total</dt>
+                  <dd>{totalPoints.toLocaleString("pt-BR")}</dd>
+                </div>
+                <div>
+                  <dt>Correção manual</dt>
+                  <dd>
+                    {
+                      draft.questions.filter(
+                        (question) => question.type === "open",
+                      ).length
                     }
-                  />
-                  <span>
-                    <strong>{material.title}</strong>
-                    <small>
-                      {material.type === "file"
-                        ? "Arquivo · salvo neste navegador"
-                        : "Link"}{" "}
-                      · {material.subject}
-                    </small>
-                  </span>
-                </label>
-              ))
-            )}
-            <Link to="/materiais" className="button ghost small">
-              <Plus size={15} /> Gerenciar materiais
-            </Link>
-          </section>
-          <p className="editor-local-note muted">
-            Demonstração: as alterações são salvas neste navegador.
+                  </dd>
+                </div>
+              </dl>
+              <div className="editor-tip">
+                <Check size={18} />
+                <p>
+                  Ao publicar uma aplicação, uma cópia desta avaliação será
+                  preservada.
+                </p>
+              </div>
+              <Link className="button secondary" to="/aplicacoes">
+                Ir para aplicações
+              </Link>
+            </section>
+            <section className="card editor-materials">
+              <div className="content-section-title">
+                <FileText size={19} />
+                <h2>Materiais de apoio</h2>
+              </div>
+              <p className="muted">Selecione o que o aluno poderá consultar.</p>
+              {materials.length === 0 ? (
+                <p className="muted">Você ainda não cadastrou materiais.</p>
+              ) : (
+                materials.map((material) => (
+                  <label className="material-checkbox" key={material.id}>
+                    <input
+                      type="checkbox"
+                      checked={draft.materialIds.includes(material.id)}
+                      onChange={(event) =>
+                        patch({
+                          materialIds: event.target.checked
+                            ? [...draft.materialIds, material.id]
+                            : draft.materialIds.filter(
+                                (value) => value !== material.id,
+                              ),
+                        })
+                      }
+                    />
+                    <span>
+                      <strong>{material.title}</strong>
+                      <small>
+                        {material.type === "file"
+                          ? "Arquivo · salvo neste navegador"
+                          : "Link"}{" "}
+                        · {material.subject}
+                      </small>
+                    </span>
+                  </label>
+                ))
+              )}
+              <Link to="/materiais" className="button ghost small">
+                <Plus size={15} /> Gerenciar materiais
+              </Link>
+            </section>
+            <p className="editor-local-note muted">
+              Demonstração: as alterações são salvas neste navegador.
+            </p>
+          </aside>
+        </div>
+      </fieldset>
+      <UnsavedChangesDialog
+        blocker={blocker}
+        description={
+          draftState === "saved"
+            ? "As alterações ainda não foram confirmadas na avaliação. O rascunho foi salvo neste navegador e estará disponível ao voltar."
+            : "As alterações ainda não foram confirmadas e o rascunho local pode estar indisponível. Continue editando para salvar a avaliação antes de sair."
+        }
+      />
+      {discardOpen && (
+        <ContentDialog
+          labelledBy="discard-draft-heading"
+          onClose={() => setDiscardOpen(false)}
+        >
+          <h2 id="discard-draft-heading">Descartar rascunho?</h2>
+          <p className="muted">
+            As alterações pendentes serão removidas deste navegador.{" "}
+            {editing
+              ? "O editor voltará à última versão salva da avaliação."
+              : "O editor voltará a uma avaliação em branco."}
           </p>
-        </aside>
-      </div>
+          <div className="content-modal-actions">
+            <button
+              className="button secondary"
+              autoFocus
+              onClick={() => setDiscardOpen(false)}
+            >
+              Continuar editando
+            </button>
+            <button className="button danger" onClick={discardDraft}>
+              Descartar rascunho
+            </button>
+          </div>
+        </ContentDialog>
+      )}
       {preview && (
         <StudentPreview
           assessment={publicPreview}

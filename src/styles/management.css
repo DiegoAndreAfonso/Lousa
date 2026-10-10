@@ -970,6 +970,24 @@ p.mg-field-help {
 .mg-profile-note svg {
   margin-top: 2px;
 }
+.mg-profile-edit {
+  display: grid;
+  gap: 18px;
+  margin-top: 20px;
+}
+.mg-profile-edit > p {
+  font-size: 12px;
+  line-height: 1.7;
+  margin: 0;
+}
+.mg-profile-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.mg-profile-edit-button {
+  margin-top: 16px;
+}
 .mg-account-right {
   display: flex;
   flex-direction: column;
@@ -1394,4 +1412,30 @@ p.mg-field-help {
     width: 32px;
     height: 32px;
   }
+}
+
+.mg-labelled-search {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 7px;
+}
+.mg-filter-label {
+  display: block;
+  color: #5e6b57;
+  font-size: 11px;
+  font-weight: 550;
+}
+.mg-search-control {
+  display: block;
+  position: relative;
+}
+.mg-search-control > svg {
+  position: absolute;
+  left: 13px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #5e6b57;
+}
+.mg-labelled-filter > .mg-filter-label {
+  margin-bottom: 7px;
 }

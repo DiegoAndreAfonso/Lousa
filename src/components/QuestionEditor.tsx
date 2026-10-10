@@ -6,6 +6,7 @@ interface QuestionEditorProps {
   index: number;
   total: number;
   error?: string;
+  errorField?: "prompt" | "points" | "options" | "correctAnswer";
   onChange: (question: Question) => void;
   onRemove: () => void;
   onMove: (direction: -1 | 1) => void;
@@ -15,10 +16,26 @@ export default function QuestionEditor({
   index,
   total,
   error,
+  errorField,
   onChange,
   onRemove,
   onMove,
 }: QuestionEditorProps) {
+  const fieldId = `question-${question.id}`;
+  const errorId = `${fieldId}-error`;
+  const invalidOptions = question.options.map(
+    (option, optionIndex) =>
+      !option.trim() ||
+      question.options.some(
+        (other, otherIndex) =>
+          otherIndex !== optionIndex &&
+          other.trim().toLocaleLowerCase("pt-BR") ===
+            option.trim().toLocaleLowerCase("pt-BR"),
+      ),
+  );
+  function isInvalid(field: QuestionEditorProps["errorField"]) {
+    return Boolean(error && errorField === field);
+  }
   function changeType(type: QuestionType) {
     onChange({
       ...question,
@@ -46,7 +63,10 @@ export default function QuestionEditor({
     });
   }
   return (
-    <article className={`card question-editor ${error ? "has-error" : ""}`}>
+    <article
+      className={`card question-editor ${error ? "has-error" : ""}`}
+      aria-describedby={error && !errorField ? errorId : undefined}
+    >
       <div className="question-editor-header">
         <span className="question-number">
           {String(index + 1).padStart(2, "0")}
@@ -102,11 +122,14 @@ export default function QuestionEditor({
         <label className="field">
           <span>Pontuação</span>
           <input
+            id={`${fieldId}-points`}
             type="number"
             min="0.1"
             max="10000"
             step="0.1"
             value={question.points}
+            aria-invalid={isInvalid("points")}
+            aria-describedby={isInvalid("points") ? errorId : undefined}
             onChange={(event) =>
               onChange({ ...question, points: Number(event.target.value) })
             }
@@ -118,17 +141,27 @@ export default function QuestionEditor({
           Enunciado <span className="required">*</span>
         </span>
         <textarea
+          id={`${fieldId}-prompt`}
           rows={3}
           placeholder="Escreva a pergunta e as orientações para o aluno..."
           value={question.prompt}
           maxLength={10000}
+          aria-invalid={isInvalid("prompt")}
+          aria-describedby={isInvalid("prompt") ? errorId : undefined}
           onChange={(event) =>
             onChange({ ...question, prompt: event.target.value })
           }
         />
       </label>
       {question.type === "single" && (
-        <fieldset className="question-options">
+        <fieldset
+          className="question-options"
+          aria-describedby={
+            isInvalid("options") || isInvalid("correctAnswer")
+              ? errorId
+              : undefined
+          }
+        >
           <legend>
             Alternativas{" "}
             <span className="muted">· marque a resposta correta</span>
@@ -139,27 +172,44 @@ export default function QuestionEditor({
               key={optionIndex}
             >
               <input
+                id={optionIndex === 0 ? `${fieldId}-correct` : undefined}
                 type="radio"
                 name={`answer-${question.id}`}
                 aria-label={`Alternativa ${optionIndex + 1} é a resposta correta da questão ${index + 1}`}
                 checked={option !== "" && question.correctAnswer === option}
                 disabled={!option.trim()}
+                aria-invalid={isInvalid("correctAnswer")}
+                aria-describedby={
+                  isInvalid("correctAnswer") ? errorId : undefined
+                }
                 onChange={() =>
                   onChange({ ...question, correctAnswer: option })
                 }
               />
-              <span className="option-letter">
+              <span className="option-letter" aria-hidden="true">
                 {String.fromCharCode(65 + optionIndex)}
               </span>
-              <input
-                value={option}
-                maxLength={2000}
-                aria-label={`Texto da alternativa ${optionIndex + 1} da questão ${index + 1}`}
-                placeholder={`Alternativa ${optionIndex + 1}`}
-                onChange={(event) =>
-                  changeOption(optionIndex, event.target.value)
-                }
-              />
+              <label className="question-option-field">
+                <span>Alternativa {optionIndex + 1}</span>
+                <input
+                  id={`${fieldId}-option-${optionIndex}`}
+                  value={option}
+                  maxLength={2000}
+                  aria-label={`Texto da alternativa ${optionIndex + 1} da questão ${index + 1}`}
+                  aria-invalid={
+                    isInvalid("options") && invalidOptions[optionIndex]
+                  }
+                  aria-describedby={
+                    isInvalid("options") && invalidOptions[optionIndex]
+                      ? errorId
+                      : undefined
+                  }
+                  placeholder="Escreva o texto da alternativa"
+                  onChange={(event) =>
+                    changeOption(optionIndex, event.target.value)
+                  }
+                />
+              </label>
               {option !== "" && question.correctAnswer === option && (
                 <Check size={16} aria-label="Resposta correta" />
               )}
@@ -197,20 +247,28 @@ export default function QuestionEditor({
         </fieldset>
       )}
       {question.type === "boolean" && (
-        <fieldset className="boolean-answer">
+        <fieldset
+          className="boolean-answer"
+          aria-describedby={isInvalid("correctAnswer") ? errorId : undefined}
+        >
           <legend>
             Gabarito <span className="required">*</span>
           </legend>
-          {["Verdadeiro", "Falso"].map((value) => (
+          {["Verdadeiro", "Falso"].map((value, optionIndex) => (
             <label
               key={value}
               className={question.correctAnswer === value ? "selected" : ""}
             >
               <input
+                id={optionIndex === 0 ? `${fieldId}-correct` : undefined}
                 type="radio"
                 name={`answer-${question.id}`}
                 value={value}
                 checked={question.correctAnswer === value}
+                aria-invalid={isInvalid("correctAnswer")}
+                aria-describedby={
+                  isInvalid("correctAnswer") ? errorId : undefined
+                }
                 onChange={() => onChange({ ...question, correctAnswer: value })}
               />
               {value}
@@ -227,7 +285,7 @@ export default function QuestionEditor({
         </div>
       )}
       {error && (
-        <p className="field-error" role="alert">
+        <p id={errorId} className="field-error" role="alert">
           {error}
         </p>
       )}

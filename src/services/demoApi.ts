@@ -110,6 +110,7 @@ function materialDatabase(): Promise<IDBDatabase | null> {
   });
 }
 async function saveFile(id: string, blob: Blob): Promise<void> {
+  const data = await blob.arrayBuffer();
   const database = await materialDatabase();
   if (!database) {
     fileFallback.set(id, blob);
@@ -117,7 +118,9 @@ async function saveFile(id: string, blob: Blob): Promise<void> {
   }
   await new Promise<void>((resolve, reject) => {
     const transaction = database.transaction("files", "readwrite");
-    transaction.objectStore("files").put(blob, id);
+    transaction
+      .objectStore("files")
+      .put({ version: 1, data, mimeType: blob.type }, id);
     transaction.oncomplete = () => {
       database.close();
       resolve();
@@ -141,7 +144,16 @@ async function readFile(id: string): Promise<Blob | null> {
     const request = database.transaction("files").objectStore("files").get(id);
     request.onsuccess = () => {
       database.close();
-      resolve(request.result instanceof Blob ? request.result : null);
+      const stored = request.result;
+      resolve(
+        stored instanceof Blob
+          ? stored
+          : stored?.version === 1 && stored.data instanceof ArrayBuffer
+            ? new Blob([stored.data], {
+                type: stored.mimeType || "application/octet-stream",
+              })
+            : null,
+      );
     };
     request.onerror = () => {
       database.close();
@@ -456,6 +468,36 @@ export function createDemoApi(options: DemoApiOptions = {}) {
     async getTeacher(): Promise<Teacher> {
       await pause();
       return clone(readState().database.teacher);
+    },
+    async updateTeacher(input: Omit<Teacher, "id">): Promise<Teacher> {
+      await pause();
+      const fields = ["name", "email", "subject", "institution"] as const;
+      if (fields.some((field) => typeof input[field] !== "string"))
+        fail("INVALID_PROFILE", "Preencha os dados do perfil demonstrativo.");
+      const profile = {
+        name: input.name.trim(),
+        email: normalizeEmail(input.email),
+        subject: input.subject.trim(),
+        institution: input.institution.trim(),
+      };
+      if (!profile.name || profile.name.length > 120)
+        fail("INVALID_PROFILE", "Informe um nome com até 120 caracteres.");
+      if (!emailPattern.test(profile.email) || profile.email.length > 254)
+        fail("INVALID_EMAIL", "Informe um e-mail fictício válido.");
+      if (!profile.subject || profile.subject.length > 120)
+        fail(
+          "INVALID_PROFILE",
+          "Informe uma disciplina com até 120 caracteres.",
+        );
+      if (!profile.institution || profile.institution.length > 200)
+        fail(
+          "INVALID_PROFILE",
+          "Informe uma instituição com até 200 caracteres.",
+        );
+      const state = readState();
+      state.database.teacher = { id: state.database.teacher.id, ...profile };
+      persist(state);
+      return clone(state.database.teacher);
     },
     async login(email: string): Promise<Teacher> {
       await pause();
@@ -999,6 +1041,7 @@ export const demoApi = createDemoApi();
 
 export const {
   getTeacher,
+  updateTeacher,
   login,
   listAssessments,
   saveAssessment,

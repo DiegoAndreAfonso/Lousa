@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   Search,
@@ -25,6 +25,9 @@ import {
   setResultsReleased,
 } from "../services/demoApi";
 import type { Application, Attempt } from "../types";
+import ConfirmDialog from "../components/ConfirmDialog";
+import UnsavedChangesDialog from "../components/UnsavedChangesDialog";
+import { useUnsavedChanges } from "../services/useUnsavedChanges";
 import {
   attemptState,
   errorMessage,
@@ -34,6 +37,55 @@ import {
 import "../styles/management.css";
 
 type Notice = { kind: "success" | "error"; text: string };
+type CorrectionDraft = {
+  version: 1;
+  base: string;
+  grades: Record<string, string>;
+  feedback: string;
+  savedAt: string;
+};
+
+function correctionDraftKey(attemptId: string) {
+  return `lousa.teacher.correction-draft.v1.${attemptId}`;
+}
+
+function gradesFromAttempt(attempt: Attempt) {
+  return Object.fromEntries(
+    Object.entries(attempt.answers)
+      .filter(([, answer]) => answer.pointsAwarded !== undefined)
+      .map(([id, answer]) => [id, String(answer.pointsAwarded)]),
+  );
+}
+
+function correctionBase(attempt: Attempt) {
+  return JSON.stringify({
+    applicationId: attempt.applicationId,
+    status: attempt.status,
+    endedAt: attempt.endedAt,
+    correctionStatus: attempt.correctionStatus,
+    answers: Object.entries(attempt.answers).sort(([a], [b]) =>
+      a.localeCompare(b),
+    ),
+    feedback: attempt.feedback,
+    score: attempt.score,
+  });
+}
+
+function validCorrectionDraft(value: unknown): value is CorrectionDraft {
+  if (!value || typeof value !== "object") return false;
+  const draft = value as Partial<CorrectionDraft>;
+  return (
+    draft.version === 1 &&
+    typeof draft.base === "string" &&
+    typeof draft.feedback === "string" &&
+    typeof draft.savedAt === "string" &&
+    Number.isFinite(Date.parse(draft.savedAt)) &&
+    !!draft.grades &&
+    typeof draft.grades === "object" &&
+    !Array.isArray(draft.grades) &&
+    Object.values(draft.grades).every((grade) => typeof grade === "string")
+  );
+}
 
 export default function ResultsPage() {
   const [params, setParams] = useSearchParams();
@@ -52,8 +104,22 @@ export default function ResultsPage() {
   const [feedback, setFeedback] = useState("");
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
-  const [dirty, setDirty] = useState(false);
+  const [draftSavedAt, setDraftSavedAt] = useState<string | null>(null);
+  const [draftStorageError, setDraftStorageError] = useState("");
+  const [draftRestored, setDraftRestored] = useState(false);
+  const [discardOpen, setDiscardOpen] = useState(false);
+  const draftPresent = useRef(false);
+  const currentSelectedId = useRef(selectedId);
+  currentSelectedId.current = selectedId;
   const applicationFilter = params.get("application") || "all";
+  const savedGrades = selected ? gradesFromAttempt(selected) : {};
+  const dirty =
+    !!selected &&
+    (feedback !== (selected.feedback || "") ||
+      Object.keys({ ...savedGrades, ...grades }).some(
+        (id) => (grades[id] ?? "") !== (savedGrades[id] ?? ""),
+      ));
+  const blocker = useUnsavedChanges(dirty);
 
   async function load() {
     setLoading(true);
@@ -79,7 +145,11 @@ export default function ResultsPage() {
     let cancelled = false;
     setNotice(null);
     setDetailError("");
-    setDirty(false);
+    setDraftSavedAt(null);
+    setDraftStorageError("");
+    setDraftRestored(false);
+    setDiscardOpen(false);
+    draftPresent.current = false;
     setGradeErrors({});
     if (!selectedId) {
       setSelected(null);
@@ -93,13 +163,33 @@ export default function ResultsPage() {
         if (cancelled) return;
         setSelected(attempt);
         setFeedback(attempt.feedback || "");
-        setGrades(
-          Object.fromEntries(
-            Object.entries(attempt.answers)
-              .filter(([, answer]) => answer.pointsAwarded !== undefined)
-              .map(([id, answer]) => [id, String(answer.pointsAwarded)]),
-          ),
-        );
+        setGrades(gradesFromAttempt(attempt));
+        if (!["submitted", "expired"].includes(attempt.status)) return;
+        try {
+          const stored = localStorage.getItem(correctionDraftKey(attempt.id));
+          if (!stored) return;
+          const draft: unknown = JSON.parse(stored);
+          if (
+            validCorrectionDraft(draft) &&
+            draft.base === correctionBase(attempt)
+          ) {
+            setGrades(draft.grades);
+            setFeedback(draft.feedback);
+            setDraftSavedAt(draft.savedAt);
+            setDraftRestored(true);
+            draftPresent.current = true;
+          } else {
+            localStorage.removeItem(correctionDraftKey(attempt.id));
+            setNotice({
+              kind: "error",
+              text: "O rascunho anterior não foi restaurado porque a correção salva mudou ou o arquivo local estava incompleto.",
+            });
+          }
+        } catch {
+          setDraftStorageError(
+            "Não foi possível ler o rascunho deste navegador. Você pode editar, mas mantenha esta página aberta até salvar a correção.",
+          );
+        }
       })
       .catch((error: unknown) => {
         if (!cancelled) setDetailError(errorMessage(error));
@@ -123,6 +213,40 @@ export default function ResultsPage() {
   const editable =
     !!selected &&
     (selected.status === "submitted" || selected.status === "expired");
+  useEffect(() => {
+    if (!selected || !editable) return;
+    try {
+      if (dirty) {
+        const savedAt = new Date().toISOString();
+        const draft: CorrectionDraft = {
+          version: 1,
+          base: correctionBase(selected),
+          grades,
+          feedback,
+          savedAt,
+        };
+        localStorage.setItem(
+          correctionDraftKey(selected.id),
+          JSON.stringify(draft),
+        );
+        draftPresent.current = true;
+        setDraftSavedAt(savedAt);
+        setDraftStorageError("");
+      } else if (draftPresent.current) {
+        localStorage.removeItem(correctionDraftKey(selected.id));
+        draftPresent.current = false;
+        setDraftSavedAt(null);
+        setDraftRestored(false);
+        setDraftStorageError("");
+      }
+    } catch {
+      setDraftStorageError(
+        dirty
+          ? "O navegador não conseguiu salvar o rascunho local. Suas alterações continuam nesta página; salve a correção antes de sair."
+          : "A correção está salva, mas o navegador não conseguiu remover o rascunho antigo. Ele não substituirá a correção salva ao recarregar.",
+      );
+    }
+  }, [selected, editable, dirty, grades, feedback]);
   const pendingCount = attempts.filter(
     (attempt) =>
       ["submitted", "expired"].includes(attempt.status) &&
@@ -175,10 +299,37 @@ export default function ResultsPage() {
   }
 
   function updateAttempt(attempt: Attempt) {
-    setSelected(attempt);
+    setSelected((previous) =>
+      previous?.id === attempt.id ? attempt : previous,
+    );
     setAttempts((previous) =>
       previous.map((item) => (item.id === attempt.id ? attempt : item)),
     );
+  }
+
+  function discardCorrection() {
+    if (!selected || busy) return;
+    try {
+      localStorage.removeItem(correctionDraftKey(selected.id));
+    } catch {
+      setDraftStorageError(
+        "Não foi possível descartar o rascunho do navegador. Suas alterações continuam nesta página; tente novamente.",
+      );
+      setDiscardOpen(false);
+      return;
+    }
+    draftPresent.current = false;
+    setGrades(gradesFromAttempt(selected));
+    setFeedback(selected.feedback || "");
+    setGradeErrors({});
+    setDraftSavedAt(null);
+    setDraftRestored(false);
+    setDraftStorageError("");
+    setDiscardOpen(false);
+    setNotice({
+      kind: "success",
+      text: "Rascunho descartado. A página voltou à correção salva.",
+    });
   }
 
   async function saveCorrection() {
@@ -209,10 +360,13 @@ export default function ResultsPage() {
     setBusy(true);
     setNotice(null);
     try {
-      const attempt = await gradeAttempt(selected.id, numericGrades, feedback);
+      const attemptId = selected.id;
+      const attempt = await gradeAttempt(attemptId, numericGrades, feedback);
       updateAttempt(attempt);
+      if (currentSelectedId.current !== attemptId) return;
       setFeedback(attempt.feedback);
-      setDirty(false);
+      setGrades(gradesFromAttempt(attempt));
+      setDraftRestored(false);
       setNotice({
         kind: "success",
         text: "Correção salva. Você pode liberar o resultado para o aluno.",
@@ -256,7 +410,47 @@ export default function ResultsPage() {
   if (selectedId) {
     return (
       <div className="mg-page">
-        <button className="mg-back-link" onClick={() => selectAttempt("")}>
+        <UnsavedChangesDialog
+          blocker={blocker}
+          description={
+            draftStorageError
+              ? "As notas e o feedback ainda não foram salvos na correção e o rascunho local não pôde ser salvo. Se sair, suas alterações poderão ser perdidas. Continue editando para salvar a correção."
+              : "As notas e o feedback ainda não foram salvos na correção. O rascunho pode ser retomado neste navegador; salve a correção para confirmá-la antes de liberar ao aluno."
+          }
+        />
+        {discardOpen && (
+          <ConfirmDialog
+            title="Descartar rascunho da correção?"
+            onClose={() => setDiscardOpen(false)}
+          >
+            <div className="modal-body">
+              <p>
+                As notas e o feedback em edição serão substituídos pela última
+                correção salva. Esta ação remove o rascunho deste navegador.
+              </p>
+            </div>
+            <div className="modal-footer">
+              <button
+                className="button secondary"
+                onClick={() => setDiscardOpen(false)}
+              >
+                Continuar editando
+              </button>
+              <button
+                className="button danger"
+                disabled={busy}
+                onClick={discardCorrection}
+              >
+                Descartar rascunho
+              </button>
+            </div>
+          </ConfirmDialog>
+        )}
+        <button
+          className="mg-back-link"
+          disabled={busy}
+          onClick={() => selectAttempt("")}
+        >
           <ArrowLeft size={17} />
           Voltar para resultados
         </button>
@@ -302,6 +496,20 @@ export default function ResultsPage() {
                 role={notice.kind === "error" ? "alert" : "status"}
               >
                 {notice.text}
+              </div>
+            )}
+            {draftStorageError && (
+              <div className="notice error" role="alert">
+                {draftStorageError}
+              </div>
+            )}
+            {dirty && !draftStorageError && draftSavedAt && (
+              <div className="notice info" aria-live="polite">
+                {draftRestored
+                  ? "Rascunho local restaurado."
+                  : "Rascunho salvo automaticamente neste navegador."}{" "}
+                As notas e o feedback ainda não fazem parte da correção salva e
+                não serão mostrados ao aluno.
               </div>
             )}
             <div className="card mg-attempt-meta">
@@ -410,7 +618,7 @@ export default function ResultsPage() {
                                       grades[question.id] ??
                                       (!answer?.value.trim() ? "0" : "")
                                     }
-                                    disabled={!answer?.value.trim()}
+                                    disabled={busy || !answer?.value.trim()}
                                     onChange={(event) => {
                                       setGrades((previous) => ({
                                         ...previous,
@@ -420,7 +628,6 @@ export default function ResultsPage() {
                                         ...previous,
                                         [question.id]: "",
                                       }));
-                                      setDirty(true);
                                     }}
                                     aria-invalid={!!gradeErrors[question.id]}
                                     aria-describedby={
@@ -503,11 +710,12 @@ export default function ResultsPage() {
                     Oriente o aluno com um comentário sobre esta entrega.
                   </p>
                   <label className="field">
-                    <span className="mg-sr-only">Feedback para o aluno</span>
+                    <span>Feedback para o aluno</span>
                     <textarea
                       rows={7}
                       value={feedback}
                       readOnly={!editable}
+                      disabled={busy}
                       placeholder={
                         editable
                           ? "O que foi bem? O que pode melhorar?"
@@ -515,7 +723,6 @@ export default function ResultsPage() {
                       }
                       onChange={(event) => {
                         setFeedback(event.target.value);
-                        setDirty(true);
                       }}
                     />
                   </label>
@@ -534,9 +741,18 @@ export default function ResultsPage() {
                     </button>
                   )}
                   {dirty && (
-                    <p className="mg-field-help">
-                      Você tem alterações ainda não salvas.
-                    </p>
+                    <>
+                      <p className="mg-field-help">
+                        Você tem alterações ainda não salvas na correção.
+                      </p>
+                      <button
+                        className="button secondary mg-full-width"
+                        disabled={busy}
+                        onClick={() => setDiscardOpen(true)}
+                      >
+                        Descartar rascunho
+                      </button>
+                    </>
                   )}
                 </section>
                 <section className="card mg-release-card">
@@ -653,18 +869,20 @@ export default function ResultsPage() {
           </div>
           <div className="card mg-list-panel">
             <div className="mg-toolbar mg-results-toolbar">
-              <label className="mg-search">
-                <Search size={18} />
-                <input
-                  className="search-input"
-                  aria-label="Pesquisar participações"
-                  placeholder="Buscar aluno, e-mail ou identificador"
-                  value={search}
-                  onChange={(event) => setSearch(event.target.value)}
-                />
+              <label className="mg-search mg-labelled-search">
+                <span className="mg-filter-label">Pesquisar participações</span>
+                <span className="mg-search-control">
+                  <Search size={18} />
+                  <input
+                    className="search-input"
+                    placeholder="Buscar aluno, e-mail ou identificador"
+                    value={search}
+                    onChange={(event) => setSearch(event.target.value)}
+                  />
+                </span>
               </label>
-              <label className="mg-filter">
-                <span className="mg-sr-only">Filtrar por aplicação</span>
+              <label className="mg-filter mg-labelled-filter">
+                <span className="mg-filter-label">Filtrar por aplicação</span>
                 <select
                   value={applicationFilter}
                   onChange={(event) =>
@@ -685,8 +903,8 @@ export default function ResultsPage() {
                   ))}
                 </select>
               </label>
-              <label className="mg-filter">
-                <span className="mg-sr-only">Filtrar por situação</span>
+              <label className="mg-filter mg-labelled-filter">
+                <span className="mg-filter-label">Filtrar por situação</span>
                 <select
                   value={statusFilter}
                   onChange={(event) => setStatusFilter(event.target.value)}

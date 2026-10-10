@@ -48,10 +48,21 @@ export default function TeacherLayout() {
   const location = useLocation();
   const navigate = useNavigate();
   useEffect(() => {
-    demoApi
-      .getTeacher()
-      .then(setTeacher)
-      .catch(() => {});
+    let alive = true;
+    const refreshTeacher = () => {
+      demoApi
+        .getTeacher()
+        .then((value) => {
+          if (alive) setTeacher(value);
+        })
+        .catch(() => {});
+    };
+    refreshTeacher();
+    window.addEventListener("lousa:teacher-updated", refreshTeacher);
+    return () => {
+      alive = false;
+      window.removeEventListener("lousa:teacher-updated", refreshTeacher);
+    };
   }, []);
   useEffect(() => {
     setMenuOpen(false);
@@ -62,7 +73,6 @@ export default function TeacherLayout() {
       : location.pathname.startsWith(item.to),
   );
   function logout() {
-    localStorage.removeItem("ao.teacher.session");
     navigate("/login", { replace: true });
   }
   return (
@@ -168,8 +178,7 @@ export default function TeacherLayout() {
           <Outlet />
         </main>
         <footer className="workspace-footer">
-          Lousa{" "}
-          <span>Feito para ensinar, aprender e acompanhar.</span>
+          Lousa <span>Feito para ensinar, aprender e acompanhar.</span>
           <span>Dados fictícios · armazenamento neste navegador</span>
         </footer>
       </div>

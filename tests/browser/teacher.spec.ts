@@ -228,16 +228,14 @@ test("professor cadastra arquivo e link, visualiza arquivo local e associa o mat
   dialog = page.getByRole("dialog", { name: "Novo material", exact: true });
   await dialog.getByLabel("Título").fill("Guia de leitura local");
   await dialog.getByLabel("Disciplina").fill("Ciências");
-  await dialog
-    .getByLabel("Selecionar arquivo do material")
-    .setInputFiles({
-      name: "guia-de-leitura.txt",
-      mimeType: "text/plain",
-      buffer: Buffer.from(
-        "Conteúdo de apoio salvo para a demonstração.",
-        "utf-8",
-      ),
-    });
+  await dialog.getByLabel("Selecionar arquivo do material").setInputFiles({
+    name: "guia-de-leitura.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.from(
+      "Conteúdo de apoio salvo para a demonstração.",
+      "utf-8",
+    ),
+  });
   await dialog
     .getByRole("button", { name: "Salvar material", exact: true })
     .click();

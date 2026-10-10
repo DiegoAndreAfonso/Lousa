@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   ArrowDownToLine,
@@ -57,7 +57,17 @@ function MaterialForm({
   const [file, setFile] = useState<File | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
+  const fieldRefs = useRef<
+    Partial<Record<"title" | "subject" | "url" | "file", HTMLInputElement>>
+  >({});
+  useEffect(() => {
+    const firstInvalid = (["title", "subject", "url", "file"] as const).find(
+      (field) => errors[field],
+    );
+    if (firstInvalid) fieldRefs.current[firstInvalid]?.focus();
+  }, [errors]);
   async function submit() {
+    if (saving) return;
     const nextErrors: Record<string, string> = {};
     if (!title.trim()) nextErrors.title = "Informe o título do material.";
     if (!subject.trim()) nextErrors.subject = "Informe a disciplina.";
@@ -136,6 +146,7 @@ function MaterialForm({
       <div className="material-type-picker" aria-label="Tipo de material">
         <button
           className={type === "file" ? "selected" : ""}
+          disabled={saving}
           aria-pressed={type === "file"}
           onClick={() => {
             setType("file");
@@ -147,6 +158,7 @@ function MaterialForm({
         </button>
         <button
           className={type === "link" ? "selected" : ""}
+          disabled={saving}
           aria-pressed={type === "link"}
           onClick={() => {
             setType("link");
@@ -157,48 +169,81 @@ function MaterialForm({
         </button>
       </div>
       <label className="field">
-        <span>
+        <span id="material-title-label">
           Título <span className="required">*</span>
         </span>
         <input
+          id="material-title"
+          disabled={saving}
+          ref={(element) => {
+            fieldRefs.current.title = element || undefined;
+          }}
           autoFocus
           maxLength={160}
           value={title}
           placeholder="Ex.: Guia de estudo de ecossistemas"
+          aria-labelledby="material-title-label"
           aria-invalid={Boolean(errors.title)}
+          aria-describedby={errors.title ? "material-title-error" : undefined}
           onChange={(event) => setTitle(event.target.value)}
         />
-        {errors.title && <small className="field-error">{errors.title}</small>}
+        {errors.title && (
+          <small id="material-title-error" className="field-error">
+            {errors.title}
+          </small>
+        )}
       </label>
       <label className="field">
-        <span>
+        <span id="material-subject-label">
           Disciplina <span className="required">*</span>
         </span>
         <input
+          id="material-subject"
+          disabled={saving}
+          ref={(element) => {
+            fieldRefs.current.subject = element || undefined;
+          }}
           maxLength={80}
           value={subject}
           placeholder="Ex.: Ciências"
+          aria-labelledby="material-subject-label"
           aria-invalid={Boolean(errors.subject)}
+          aria-describedby={
+            errors.subject ? "material-subject-error" : undefined
+          }
           onChange={(event) => setSubject(event.target.value)}
         />
         {errors.subject && (
-          <small className="field-error">{errors.subject}</small>
+          <small id="material-subject-error" className="field-error">
+            {errors.subject}
+          </small>
         )}
       </label>
       {type === "link" ? (
         <label className="field">
-          <span>
+          <span id="material-url-label">
             Endereço do link <span className="required">*</span>
           </span>
           <input
+            id="material-url"
+            disabled={saving}
+            ref={(element) => {
+              fieldRefs.current.url = element || undefined;
+            }}
             type="url"
             maxLength={2000}
             value={url}
             placeholder="https://exemplo.com/material"
+            aria-labelledby="material-url-label"
             aria-invalid={Boolean(errors.url)}
+            aria-describedby={errors.url ? "material-url-error" : undefined}
             onChange={(event) => setUrl(event.target.value)}
           />
-          {errors.url && <small className="field-error">{errors.url}</small>}
+          {errors.url && (
+            <small id="material-url-error" className="field-error">
+              {errors.url}
+            </small>
+          )}
         </label>
       ) : (
         <div className="field">
@@ -216,16 +261,31 @@ function MaterialForm({
                 : "Clique para selecionar · até 25 MB"}
             </span>
             <input
+              id="material-file"
+              disabled={saving}
+              ref={(element) => {
+                fieldRefs.current.file = element || undefined;
+              }}
               type="file"
               aria-label="Selecionar arquivo do material"
+              aria-invalid={Boolean(errors.file)}
+              aria-describedby={
+                errors.file
+                  ? "material-file-error material-file-help"
+                  : "material-file-help"
+              }
               onChange={(event) => {
                 setFile(event.target.files?.[0] || null);
                 setErrors({});
               }}
             />
           </label>
-          {errors.file && <small className="field-error">{errors.file}</small>}
-          <small className="muted">
+          {errors.file && (
+            <small id="material-file-error" className="field-error">
+              {errors.file}
+            </small>
+          )}
+          <small id="material-file-help" className="muted">
             {initial?.type === "file" && !file
               ? "O arquivo atual será mantido se você não escolher outro."
               : "O arquivo ficará salvo neste navegador usando IndexedDB."}
@@ -424,25 +484,31 @@ export default function MaterialsPage() {
             ))}
           </div>
           <div className="content-filters">
-            <label className="content-search">
-              <Search size={17} />
-              <input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Buscar material..."
-                aria-label="Buscar material"
-              />
+            <label className="content-filter-field">
+              <span>Buscar material</span>
+              <span className="content-search">
+                <Search size={17} aria-hidden="true" />
+                <input
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder="Buscar material..."
+                  aria-label="Buscar material"
+                />
+              </span>
             </label>
-            <select
-              value={subject}
-              onChange={(event) => setSubject(event.target.value)}
-              aria-label="Filtrar materiais por disciplina"
-            >
-              <option value="all">Todas as disciplinas</option>
-              {subjects.map((value) => (
-                <option key={value}>{value}</option>
-              ))}
-            </select>
+            <label className="content-filter-field">
+              <span>Filtrar materiais por disciplina</span>
+              <select
+                value={subject}
+                onChange={(event) => setSubject(event.target.value)}
+                aria-label="Filtrar materiais por disciplina"
+              >
+                <option value="all">Todas as disciplinas</option>
+                {subjects.map((value) => (
+                  <option key={value}>{value}</option>
+                ))}
+              </select>
+            </label>
           </div>
         </div>
         {loading ? (

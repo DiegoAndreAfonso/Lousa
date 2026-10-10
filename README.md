@@ -30,19 +30,21 @@ npm test
 Para executar os testes de percurso no navegador, instale o Chromium usado pelo Playwright e execute:
 
 ```bash
-npx playwright install chromium
+npx playwright install chromium firefox webkit
 npm run test:e2e
 ```
 
-A configuração inicia o servidor de desenvolvimento em `http://127.0.0.1:5173` ou reutiliza um servidor já ativo nesse endereço. Cada teste usa um contexto de navegador independente. Para verificar somente os cenários públicos:
+A configuração verifica Chromium, Firefox e WebKit e inicia o servidor de desenvolvimento em `http://127.0.0.1:5173` ou reutiliza um servidor já ativo nesse endereço. Cada teste usa um contexto de navegador independente. Em Linux, os navegadores podem exigir bibliotecas adicionais, indicadas por `npx playwright install-deps`. WebKit verifica o motor de renderização usado pelo Safari; a validação em um dispositivo Apple continua sendo uma etapa própria. Para verificar somente os cenários públicos no Chromium:
 
 ```bash
-npx playwright test tests/browser/student.spec.ts --workers=1
+npx playwright test tests/browser/student.spec.ts --project=chromium --workers=1
 ```
 
 ## Acesso à demonstração
 
-O painel do professor começa em `/login`. Use `marina@exemplo.com`, já preenchido, ou outro e-mail fictício válido. A entrada abre o perfil fictício de Marina Costa, professora de Biologia da Escola Horizonte. Não há senha, credenciais reais, autenticação de produção, checkout ou cobrança.
+O painel do professor começa em `/login`. Use `marina@exemplo.com`, já preenchido, ou outro e-mail fictício válido. A entrada abre o perfil fictício de Marina Costa, professora de Biologia da Escola Horizonte. O login não exige senha e não usa credenciais reais, autenticação de produção, checkout ou cobrança.
+
+Em `/cadastro`, é possível configurar o perfil do professor com dados fictícios e testar os campos de senha e confirmação. As senhas são validadas somente na tela, descartadas ao entrar e nunca armazenadas. O cadastro atualiza o único perfil local da demonstração; não cria contas independentes. `/recuperar-acesso` simula a solicitação e apresenta a confirmação, sem enviar e-mail, armazenar o endereço informado ou alterar senhas. A confirmação permite experimentar os campos de redefinição e validar uma nova senha fictícia, que também é descartada ao concluir. Em Conta, o perfil pode ser editado, com validação, persistência local e atualização do nome no cabeçalho.
 
 O aluno acessa `/participar`, informa um código ou abre diretamente `/p/:codigo`. As rotas públicas apresentam somente o fluxo da atividade, sem o menu do professor. O login demonstrativo é um marcador local para a navegação do painel; ele não oferece autorização de segurança.
 
@@ -65,7 +67,7 @@ As datas de exemplo são calculadas quando os dados são criados pela primeira v
 - **Materiais:** cadastro e consulta de links e arquivos locais. Os arquivos ficam no navegador, com visualização quando o formato permite; não são apresentados como enviados a um servidor.
 - **Aplicações:** validação de período, duração, lista de e-mails e ambiente; geração de código e link, cópia do link e encerramento.
 - **Resultados:** participações com identificador próprio, respostas, correção das questões abertas, feedback e controle de liberação. Questões objetivas são pontuadas automaticamente. Questões abertas sem resposta valem zero. Desistências preservam as respostas salvas para consulta, sem correção ou liberação de nota.
-- **Conta:** perfil fictício e estado demonstrativo da assinatura.
+- **Conta:** edição do perfil fictício e estado demonstrativo da assinatura, com proteção das alterações pendentes ao sair.
 - **Aluno:** acesso, identificação, instruções e materiais, preparação do ambiente, navegação pelas questões, rascunho local, sincronização simulada, revisão, entrega ou desistência e confirmação. Nota e feedback aparecem somente após a liberação pelo professor.
 
 ## Estrutura
@@ -96,6 +98,18 @@ Os modelos principais são `Teacher`, `Assessment`, `Question`, `Material`, `App
 
 Os serviços oferecem métodos assíncronos por `demoApi` e por exports nomeados. `createDemoApi` aceita armazenamento e relógio substituíveis para testes. Erros incluem `code` e uma mensagem legível em português. Os métodos públicos devolvem modelos separados: sem gabaritos, lista de e-mails autorizados ou notas e feedback ainda não liberados.
 
+As páginas são carregadas sob demanda, com mensagem de carregamento, para reduzir o código necessário na entrada. A navegação do painel usa bloqueio de saída quando existem alterações pendentes no editor, na correção ou no perfil. Cancelar uma saída para a tela de login mantém a sessão demonstrativa atual.
+
+## Rascunhos do professor
+
+O editor de avaliações salva automaticamente um rascunho local, inclusive quando o conteúdo ainda está incompleto. Ao recarregar ou voltar, o rascunho é recuperado e identificado como não confirmado. Somente **Salvar avaliação** atualiza a avaliação reutilizável; aplicações publicadas preservam suas cópias. Os campos ficam temporariamente desabilitados durante a confirmação para evitar que uma resposta do serviço substitua uma edição posterior.
+
+O rascunho usa `lousa.teacher.assessment-draft.v1.<ID>`; novas avaliações usam o sufixo `new`. Ele é removido após confirmar ou descartar. Se a avaliação salva foi atualizada depois da criação do rascunho, a tela solicita uma escolha entre recuperar o rascunho e continuar com a versão salva. A proteção de versão ocorre ao abrir o editor; edição simultânea em várias abas ainda exige controle de concorrência na integração futura.
+
+Notas abertas e feedback também têm rascunhos locais por tentativa, em `lousa.teacher.correction-draft.v1.<ID>`. Recuperar esse rascunho não salva a correção nem libera o resultado. Um rascunho incompatível com uma correção oficial mais recente não é aplicado e a tela informa o ocorrido. A confirmação ou o descarte limpa o rascunho correspondente.
+
+O aviso de saída também cobre os menus e os botões Voltar. Fechar ou recarregar pode apresentar a confirmação padrão do navegador. Falhas no armazenamento são informadas sem apagar os campos da página. Os rascunhos permanecem restritos ao navegador e não substituem persistência remota.
+
 ## Persistência e regras das tentativas
 
 Dados pequenos são armazenados em `avaliacoes-online.demo.v1` no localStorage. Arquivos ficam no banco IndexedDB `avaliacoes-online-materials-v1`, no armazenamento `files`. Os textos de apoio iniciais são arquivos de exemplo incluídos no código. URLs e metadados dos materiais permanecem nos dados pequenos.
@@ -123,6 +137,8 @@ O estado da participação, o estado da correção e a liberação do resultado 
 Os testes automatizados cobrem IDs distintos inclusive em chamadas simultâneas, recarga e prazo absoluto, respostas finais imutáveis, expiração com rascunho local após falha, validações de disponibilidade e configuração, e-mail e token inválidos, cópias publicadas, retorno público, correção/liberação e aplicativo indisponível.
 
 Os testes de navegador verificam as mensagens de acesso, identificação por e-mail, novas participações explícitas com nomes iguais, recarga de respostas e prazo, recuperação de rascunho após falha de sincronização, suspensão e retomada do aplicativo e confirmação após tempo esgotado. O cenário de expiração encurta somente o prazo de um dado local de teste para evitar aguardar os 45 minutos da atividade; a derivação do prazo é coberta nos testes de domínio.
+
+Os percursos do professor também cobrem rascunhos de avaliação e correção, recarga e saída confirmada, descarte, falhas no armazenamento, proteção durante o salvamento e conflito com uma versão confirmada. Cadastro, recuperação e edição de perfil são verificados sem persistir senhas. Os testes de acessibilidade incluem nomes e descrições dos campos, foco no primeiro erro, foco no diálogo de saída e retorno por Escape; a validação manual com leitores de tela continua recomendada.
 
 ## Integrações futuras e limites
 

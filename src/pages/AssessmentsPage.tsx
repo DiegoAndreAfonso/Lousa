@@ -157,25 +157,31 @@ export default function AssessmentsPage() {
           </button>
         </div>
         <div className="content-filters">
-          <label className="content-search">
-            <Search size={17} />
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Buscar avaliação..."
-              aria-label="Buscar avaliação"
-            />
+          <label className="content-filter-field">
+            <span>Buscar avaliação</span>
+            <span className="content-search">
+              <Search size={17} aria-hidden="true" />
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Buscar avaliação..."
+                aria-label="Buscar avaliação"
+              />
+            </span>
           </label>
-          <select
-            value={subject}
-            onChange={(event) => setSubject(event.target.value)}
-            aria-label="Filtrar por disciplina"
-          >
-            <option value="all">Todas as disciplinas</option>
-            {subjects.map((value) => (
-              <option key={value}>{value}</option>
-            ))}
-          </select>
+          <label className="content-filter-field">
+            <span>Filtrar por disciplina</span>
+            <select
+              value={subject}
+              onChange={(event) => setSubject(event.target.value)}
+              aria-label="Filtrar por disciplina"
+            >
+              <option value="all">Todas as disciplinas</option>
+              {subjects.map((value) => (
+                <option key={value}>{value}</option>
+              ))}
+            </select>
+          </label>
         </div>
       </div>
       {loading ? (

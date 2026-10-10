@@ -238,6 +238,95 @@
   align-items: center;
   font-weight: 600;
 }
+.login-account-links {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 18px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.auth-form {
+  max-width: 440px;
+}
+.auth-back {
+  display: flex;
+  width: fit-content;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  margin-bottom: 30px;
+}
+.auth-form > .badge {
+  margin-bottom: 18px;
+}
+.auth-form > p {
+  margin-bottom: 24px;
+}
+.auth-fields {
+  display: grid;
+  gap: 17px;
+}
+.auth-fields .login-submit {
+  margin-top: 4px;
+}
+.auth-demo-help {
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--muted);
+  margin: 0;
+}
+.auth-story-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  margin-top: 44px;
+  padding: 23px;
+  border: 1px solid #ffffff25;
+  border-radius: 12px;
+  max-width: 390px;
+  background: #ffffff08;
+}
+.auth-story-note > svg {
+  flex-shrink: 0;
+  color: #dcebcf;
+}
+.auth-story-note strong {
+  font-size: 14px;
+}
+.auth-story-note p {
+  color: #cad9ca;
+  font-size: 12px;
+  line-height: 1.7;
+  margin: 8px 0 0;
+}
+.auth-confirmation {
+  border: 1px solid var(--border);
+  background: #f7f9f3;
+  padding: 25px;
+  border-radius: 12px;
+}
+.auth-confirmation h3 {
+  margin: 14px 0 10px;
+  font-size: 19px;
+  line-height: 1.4;
+}
+.auth-confirmation p {
+  font-size: 13px;
+  line-height: 1.8;
+  color: var(--muted);
+}
+.auth-confirmation-icon {
+  display: inline-flex;
+  color: #2c684a;
+}
+.auth-confirmation .login-submit {
+  margin-top: 20px;
+}
+.auth-confirmation .button.ghost {
+  margin-top: 13px;
+}
 @media (min-width: 1500px) {
   .login-story {
     padding-inline: 100px;
@@ -284,7 +373,8 @@
   }
   .login-story-content > p,
   .login-illustration,
-  .login-story-footer {
+  .login-story-footer,
+  .auth-story-note {
     display: none;
   }
   .login-eyebrow {
@@ -299,4 +389,8 @@
   .login-form > .badge {
     margin-bottom: 18px;
   }
+}
+
+.login-story .login-brand {
+  color: #fff;
 }

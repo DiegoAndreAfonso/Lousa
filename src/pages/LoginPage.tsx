@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
   ArrowRight,
@@ -17,12 +17,24 @@ export default function LoginPage() {
   const [email, setEmail] = useState("marina@exemplo.com");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const emailInput = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
+  useEffect(() => {
+    try {
+      localStorage.removeItem("ao.teacher.session");
+    } catch {
+      setError(
+        "O navegador não permite acessar os dados locais. Verifique as permissões para entrar na demonstração.",
+      );
+    }
+  }, []);
   async function login(event: React.FormEvent) {
     event.preventDefault();
+    if (busy) return;
     setError("");
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
       setError("Informe um e-mail válido para entrar na demonstração.");
+      emailInput.current?.focus();
       return;
     }
     setBusy(true);
@@ -103,25 +115,41 @@ export default function LoginPage() {
           </p>
           <form onSubmit={login} noValidate>
             <label className="field">
-              E-mail demonstrativo
+              <span id="login-email-label">E-mail demonstrativo</span>
               <input
+                ref={emailInput}
                 type="email"
+                required
+                maxLength={254}
+                disabled={busy}
                 value={email}
-                onChange={(event) => setEmail(event.target.value)}
+                onChange={(event) => {
+                  setEmail(event.target.value);
+                  setError("");
+                }}
                 autoComplete="off"
+                aria-labelledby="login-email-label"
                 aria-invalid={!!error}
-                aria-describedby="login-help"
+                aria-describedby={`login-help${error ? " login-error" : ""}`}
               />
             </label>
             <small id="login-help" className="field-help">
               Use o e-mail preenchido ou outro e-mail fictício válido.
             </small>
-            {error && <ErrorNotice message={error} />}
+            {error && (
+              <div id="login-error">
+                <ErrorNotice message={error} />
+              </div>
+            )}
             <button className="button primary login-submit" disabled={busy}>
               {busy ? "Entrando…" : "Entrar na demonstração"}
               <ArrowRight size={18} />
             </button>
           </form>
+          <div className="login-account-links">
+            <Link to="/cadastro">Criar perfil demonstrativo</Link>
+            <Link to="/recuperar-acesso">Recuperar acesso</Link>
+          </div>
           <div className="login-demo-info">
             <FileCheck2 size={20} />
             <p>
