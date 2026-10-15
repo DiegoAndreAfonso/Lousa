@@ -111,27 +111,107 @@ Principais responsabilidades previstas:
 - Gerenciamento de arquivos e materiais de apoio.
 - Disponibilização dos dados por meio de uma API REST.
 
-## Estrutura dos repositórios
+## Instalação e execução
 
-A estrutura poderá ser organizada da seguinte forma:
+### Pré-requisitos
 
-```text
-lousa/
-├── frontend/
-│   ├── src/
-│   ├── public/
-│   ├── tests/
-│   ├── package.json
-│   └── README.md
-│
-├── backend/
-│   ├── app/
-│   ├── bootstrap/
-│   ├── config/
-│   ├── database/
-│   ├── routes/
-│   ├── tests/
-│   ├── composer.json
-│   └── README.md
-│
-└── README.md
+- Git
+- Node.js 20.19 ou superior
+- npm
+- PHP compatível com a versão do Laravel utilizada
+- Composer
+- Banco de dados configurado para o back-end
+
+### 1. Clonar o repositório
+
+```bash
+git clone <(https://github.com/DiegoAndreAfonso/Lousa>
+cd lousa
+```
+
+### 2. Configurar o back-end
+
+Acesse o diretório do back-end:
+```bash
+cd backend
+```
+Instale as dependências:
+```bash
+composer install
+```
+Crie o arquivo de configuração:
+```bash
+cp .env.example .env
+```
+Gere a chave da aplicação:
+```bash
+php artisan key:generate
+```
+Configure as variáveis de ambiente no arquivo .env, incluindo as credenciais do banco de dados.
+
+
+Execute as migrações:
+```bash
+php artisan migrate
+```
+Inicie o servidor Laravel:
+```bash
+php artisan serve
+```
+Por padrão, a API ficará disponível em:
+```bash
+http://127.0.0.1:8000
+```
+Mantenha esse terminal aberto enquanto utilizar a aplicação.
+
+### 3. Configurar o front-end
+Abra outro terminal e acesse o diretório do front-end, a partir da raiz do projeto:
+```bash
+cd frontend
+```
+Instale as dependências:
+```bash
+npm ci
+```
+Configure o endereço da API conforme a estratégia de configuração adotada pelo projeto.
+
+Inicie o servidor de desenvolvimento:
+```bash
+npm run dev
+```
+O Vite exibirá o endereço local para acessar a aplicação no navegador, geralmente:
+```bash
+http://localhost:5173
+```
+### 4. Executar os testes
+Para verificar os tipos TypeScript:
+```bash
+npm run typecheck
+```
+Para executar os testes de domínio:
+```bash
+npm test
+```
+Para executar os testes de navegação no navegador, instale os navegadores necessários:
+```bash
+npx playwright install chromium firefox webkit
+```
+Execute os testes:
+```bash
+npm run test:e2e
+```
+### 5. Gerar a versão de produção
+Para compilar o front-end:
+```bash
+npm run build
+```
+Para visualizar a versão compilada localmente:
+```bash
+npm run preview
+```
+A publicação do front-end e do back-end deverá ser configurada separadamente, considerando o servidor web, a API, o banco de dados e as variáveis de ambiente de produção.
+
+
+**Importante:** os comandos pressupõem que o repositório tenha os diretórios `frontend/` e `backend/`. Se o front-end estiver atualmente na raiz do repositório, será necessário ajustar os caminhos ou reorganizar os diretórios.
+
+Além disso, como o back-end ainda será desenvolvido, os comandos do Laravel representam o procedimento previsto para quando sua estrutura estiver pronta. A configuração da URL da API no front-end também deverá corresponder à implementação real.
